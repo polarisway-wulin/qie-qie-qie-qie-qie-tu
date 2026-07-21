@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>切切切切切图 · 五图模式</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=5" />
+    <link rel="stylesheet" href="./styles.css?v=20260719-2" />
+    <script src="./script.js?v=20260719-2" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div class="drop-copy">
+            <p class="eyebrow">Five Image Slicer</p>
+            <h1>切切切切切图 · 五图模式</h1>
+          </div>
+          <div class="topbar-actions">
+            <a class="mode-button" href="../index.html">返回通用模式</a>
+            <button class="icon-button" id="resetBtn" type="button" title="清空">
+              <span aria-hidden="true">↺</span>
+              <span class="sr-only">清空</span>
+            </button>
+            <button class="folder-export-button" id="exportFolderBtn" type="button" disabled>
+              导出文件夹
+            </button>
+            <button class="primary-button" id="downloadBtn" type="button" disabled>
+              下载 ZIP
+            </button>
+          </div>
+        </header>
+
+        <section class="drop-zone" id="dropZone">
+          <input id="fileInput" type="file" accept="image/*" multiple />
+          <input id="folderInput" class="folder-input" type="file" accept="image/*" webkitdirectory directory multiple />
+          <div class="drop-copy">
+            <h2>拖入五图图片/文件夹，或点击选择</h2>
+            <p>专用于上排 3 张、下排 2 张，支持分多次导入和文件夹。</p>
+            <button class="folder-button" id="folderBtn" type="button">选择文件夹</button>
+          </div>
+        </section>
+
+        <section class="queue-panel" aria-label="导入队列">
+          <div class="queue-header">
+            <strong>导入队列</strong>
+            <div class="queue-actions">
+              <span id="importCount">0 张</span>
+              <button class="clear-queue-button" id="clearQueueBtn" type="button" disabled>清空队列</button>
+            </div>
+          </div>
+          <div class="import-list" id="importList">
+            <span>还没有导入图片</span>
+          </div>
+        </section>
+
+        <section class="preview-panel" aria-label="图片预览">
+          <div class="preview-toolbar">
+            <div>
+              <p id="imageMeta">尚未载入图片</p>
+              <strong id="sliceMeta">等待切图</strong>
+            </div>
+            <div class="legend">
+              <span class="legend-box"></span>
+              <span>橙框为每张切片</span>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="previewCanvas"></canvas>
+            <div class="preview-links" id="previewLinks" aria-hidden="true"></div>
+            <div class="empty-state" id="emptyState">
+              <strong>预览会显示在这里</strong>
+              <span>导入图片后会直接显示切图效果。</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="control-panel" aria-label="切图设置">
+        <section class="panel-section">
+          <h2>自动识别</h2>
+          <label class="field">
+            <span>透明度阈值</span>
+            <input id="alphaThreshold" type="range" min="1" max="255" value="12" />
+            <output id="alphaOutput">12</output>
+          </label>
+          <label class="field">
+            <span>背景容差</span>
+            <input id="colorTolerance" type="range" min="0" max="120" value="24" />
+            <output id="toleranceOutput">24</output>
+          </label>
+          <label class="field">
+            <span>最小区域</span>
+            <input id="minArea" type="number" min="1" value="64" />
+          </label>
+          <label class="field">
+            <span>间距合并</span>
+            <input id="mergeGap" type="number" min="0" value="4" />
+          </label>
+          <label class="check-field">
+            <input id="detectBackground" type="checkbox" checked />
+            <span>识别四角纯色背景</span>
+          </label>
+          <label class="check-field">
+            <input id="groupTextLabels" type="checkbox" checked />
+            <span>标题随图合并</span>
+          </label>
+          <label class="field">
+            <span>标题高度上限</span>
+            <input id="textMaxHeight" type="number" min="1" value="120" />
+          </label>
+        </section>
+
+        <section class="panel-section">
+          <h2>导出命名</h2>
+          <label class="check-field">
+            <input id="useSourceName" type="checkbox" checked disabled />
+            <span>固定按原图文件名命名</span>
+          </label>
+          <p class="field-note">例如 day.png 切 2 张，会导出 day-01.png、day-02.png。</p>
+          <label class="field">
+            <span>起始序号</span>
+            <input id="startIndex" type="number" min="1" value="1" />
+          </label>
+          <label class="field">
+            <span>序号位数</span>
+            <input id="sequenceDigits" type="number" min="1" max="4" value="2" />
+          </label>
+          <label class="field">
+            <span>额外切边</span>
+            <input id="padding" type="number" min="0" value="32" />
+          </label>
+          <label class="field">
+            <span>格式</span>
+            <select id="exportFormat">
+              <option value="png">PNG</option>
+              <option value="webp">WEBP</option>
+              <option value="jpeg">JPG</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>背景</span>
+            <select id="backgroundMode">
+              <option value="white">白底</option>
+              <option value="transparent">透明</option>
+            </select>
+          </label>
+          <output class="name-preview" id="namePreview">文件名预览</output>
+          <button class="secondary-button" id="sliceBtn" type="button" disabled>确认切图</button>
+        </section>
+
+        <section class="panel-section results-section" id="resultsSection">
+          <div class="results-header">
+            <h2>切片</h2>
+            <span id="resultCount">0</span>
+          </div>
+          <div class="thumb-grid" id="thumbGrid"></div>
+        </section>
+      </aside>
+    </main>
+
+    <div class="lightbox is-hidden" id="sliceLightbox" role="dialog" aria-modal="true" aria-label="切图放大预览">
+      <button class="lightbox-close" id="lightboxClose" type="button" aria-label="关闭">×</button>
+      <figure class="lightbox-frame">
+        <img id="lightboxImage" alt="" />
+        <figcaption id="lightboxCaption"></figcaption>
+      </figure>
+    </div>
+  </body>
+</html>

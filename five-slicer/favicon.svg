@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="切切切切切图图标">
+  <rect width="64" height="64" rx="14" fill="#d2b0ff"/>
+  <rect x="10" y="10" width="44" height="44" rx="11" fill="#ffffff"/>
+  <path d="M21 20h22v24H21z" fill="#d2b0ff"/>
+  <path d="M32 16v32M16 32h32" stroke="#ffffff" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M32 21v22M21 32h22" stroke="#d2b0ff" stroke-width="4.5" stroke-linecap="round"/>
+</svg>
