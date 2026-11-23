@@ -844,20 +844,22 @@ button:not(:disabled):hover {
   background: #f0f1f5;
 }
 
-.custom-slice-stage img {
+.custom-slice-image-wrap {
+  position: relative;
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.custom-slice-image-wrap img {
   display: block;
   width: 100%;
   height: auto;
-  max-width: 100%;
-  max-height: none;
-  object-fit: scale-down;
-  flex: 0 0 auto;
   user-select: none;
 }
 
 .custom-grid {
   position: absolute;
-  inset: 24px;
+  inset: 0;
   pointer-events: none;
   outline: 3px solid var(--slice-guide);
   outline-offset: -2px;
@@ -881,6 +883,10 @@ button:not(:disabled):hover {
 .custom-grid-line.is-selected::before {
   background: var(--accent-strong);
   box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(95, 89, 207, 0.42);
+}
+
+.custom-grid-line.is-dragging {
+  z-index: 3;
 }
 
 .custom-grid-line.vertical {
@@ -1026,10 +1032,6 @@ button:not(:disabled):hover {
 
   .custom-slice-stage {
     padding: 12px;
-  }
-
-  .custom-grid {
-    inset: 12px;
   }
 
   .custom-slice-footer {

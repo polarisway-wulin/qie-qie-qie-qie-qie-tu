@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>切图工具</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=5" />
-    <link rel="stylesheet" href="./styles.css?v=20261123-2" />
+    <link rel="stylesheet" href="./styles.css?v=20261123-4" />
     <script src="./slice-content.js?v=20261123-1" defer></script>
-    <script src="./script.js?v=20261123-3" defer></script>
+    <script src="./script.js?v=20261123-4" defer></script>
   </head>
   <body>
     <main class="app-shell">
@@ -186,8 +186,10 @@
           <button class="secondary-button" id="customGridReset" type="button">重新建议</button>
         </div>
         <div class="custom-slice-stage" id="customSliceStage">
-          <img id="customSliceImage" alt="待自定义切图的原图" />
-          <div class="custom-grid" id="customGrid"></div>
+          <div class="custom-slice-image-wrap">
+            <img id="customSliceImage" alt="待自定义切图的原图" />
+            <div class="custom-grid" id="customGrid"></div>
+          </div>
         </div>
         <footer class="custom-slice-footer">
           <span id="customSliceCount" aria-live="polite">9 个切片</span>

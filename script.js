@@ -571,14 +571,12 @@ function guessCustomGrid() {
 }
 
 function setCustomGuides(guides = {}) {
-  const vertical = [...(guides.vertical || [])]
-    .map((value) => clamp(Number(value), 0.02, 0.98))
+  const sortStops = (stops = []) => stops
+    .filter((value) => value > 0 && value < 1)
     .sort((a, b) => a - b)
     .slice(0, 11);
-  const horizontal = [...(guides.horizontal || [])]
-    .map((value) => clamp(Number(value), 0.02, 0.98))
-    .sort((a, b) => a - b)
-    .slice(0, 11);
+  const vertical = sortStops(guides.vertical);
+  const horizontal = sortStops(guides.horizontal);
   customGridState = {
     columns: vertical.length + 1,
     rows: horizontal.length + 1,
@@ -636,19 +634,6 @@ function deleteSelectedCustomGuide() {
   renderCustomGrid();
 }
 
-function positionCustomGrid() {
-  if (!customGridImage || !els.customGrid || !els.customSliceStage) {
-    return;
-  }
-
-  const imageRect = els.customSliceImage.getBoundingClientRect();
-  const stageRect = els.customSliceStage.getBoundingClientRect();
-  els.customGrid.style.left = `${imageRect.left - stageRect.left}px`;
-  els.customGrid.style.top = `${imageRect.top - stageRect.top}px`;
-  els.customGrid.style.width = `${imageRect.width}px`;
-  els.customGrid.style.height = `${imageRect.height}px`;
-}
-
 function updateCustomGridLabel() {
   const count = customGridState.columns * customGridState.rows;
   els.customSliceCount.textContent = `${count} 个区域 · 纯空白区域不会导出`;
@@ -704,40 +689,73 @@ function renderCustomGrid() {
   els.customGrid.append(fragment);
   els.customDeleteGuide.disabled = !selectedCustomGuide;
   updateCustomGridLabel();
-  requestAnimationFrame(positionCustomGrid);
 }
 
 function startCustomGridDrag(event) {
+  if (!event.isPrimary || event.button !== 0 || !customGridImage) {
+    return;
+  }
+
   event.preventDefault();
   event.stopPropagation();
   const line = event.currentTarget;
   const direction = line.dataset.direction;
+  const isVertical = direction === "vertical";
   const index = Number(line.dataset.index);
+  const image = customGridImage;
+  const stops = customGridState[direction];
+  const axisPixels = isVertical ? image.width : image.height;
+  const initialPosition = stops[index];
+  const occupiedPixels = new Set(stops
+    .filter((_, stopIndex) => stopIndex !== index)
+    .map((position) => Math.round(position * axisPixels)));
+  const pointerPosition = (pointerEvent) => {
+    const rect = els.customGrid.getBoundingClientRect();
+    return isVertical
+      ? (pointerEvent.clientX - rect.left) / Math.max(1, rect.width)
+      : (pointerEvent.clientY - rect.top) / Math.max(1, rect.height);
+  };
+  const grabOffset = initialPosition - pointerPosition(event);
+  const { pointerId } = event;
+  const drag = new AbortController();
+
   selectedCustomGuide = { direction, index };
   els.customGrid.querySelectorAll(".custom-grid-line.is-selected")
     .forEach((item) => item.classList.remove("is-selected"));
-  line.classList.add("is-selected");
+  line.classList.add("is-selected", "is-dragging");
   els.customDeleteGuide.disabled = false;
-  const rect = els.customGrid.getBoundingClientRect();
-  const stops = direction === "vertical" ? customGridState.vertical : customGridState.horizontal;
-  const min = index === 0 ? 0.02 : stops[index - 1] + 0.02;
-  const max = index === stops.length - 1 ? 0.98 : stops[index + 1] - 0.02;
+  line.setPointerCapture(pointerId);
+
   const move = (moveEvent) => {
-    const raw = direction === "vertical"
-      ? (moveEvent.clientX - rect.left) / Math.max(1, rect.width)
-      : (moveEvent.clientY - rect.top) / Math.max(1, rect.height);
-    stops[index] = clamp(raw, min, max);
-    line.style[direction === "vertical" ? "left" : "top"] = `${stops[index] * 100}%`;
+    if (moveEvent.pointerId !== pointerId || axisPixels < 2) {
+      return;
+    }
+    const pixel = clamp(Math.round((pointerPosition(moveEvent) + grabOffset) * axisPixels), 1, axisPixels - 1);
+    if (!occupiedPixels.has(pixel)) {
+      stops[index] = pixel / axisPixels;
+      line.style[isVertical ? "left" : "top"] = `${stops[index] * 100}%`;
+    }
   };
-  const end = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", end);
-    window.removeEventListener("pointercancel", end);
+
+  const end = (endEvent) => {
+    if (endEvent.pointerId !== pointerId) {
+      return;
+    }
+    drag.abort();
+    if (customGridImage !== image || customGridState[direction] !== stops) {
+      return;
+    }
+
+    const position = endEvent.type === "pointerup" ? stops[index] : initialPosition;
+    stops[index] = position;
+    stops.sort((a, b) => a - b);
+    selectedCustomGuide = { direction, index: stops.indexOf(position) };
     renderCustomGrid();
   };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end, { once: true });
-  window.addEventListener("pointercancel", end, { once: true });
+  line.addEventListener("pointermove", move, { signal: drag.signal });
+  line.addEventListener("pointerup", end, { signal: drag.signal });
+  line.addEventListener("pointercancel", end, { signal: drag.signal });
+  line.addEventListener("lostpointercapture", end, { signal: drag.signal });
 }
 
 function openCustomSliceEditor() {
@@ -748,6 +766,8 @@ function openCustomSliceEditor() {
 
   customGridImage = image;
   customGuideBands = getCustomGuideBands(image);
+  els.customSliceImage.width = image.width;
+  els.customSliceImage.height = image.height;
   els.customSliceImage.src = image.canvas.toDataURL("image/png");
   els.customSliceMeta.textContent = `${image.displayName} · ${image.width} × ${image.height}px · 拖动横线和竖线调整切片范围`;
   els.customSliceModal.classList.remove("is-hidden");
@@ -3236,9 +3256,6 @@ els.customAddHorizontal.addEventListener("click", () => addCustomGuide("horizont
 els.customAddVertical.addEventListener("click", () => addCustomGuide("vertical"));
 els.customDeleteGuide.addEventListener("click", deleteSelectedCustomGuide);
 els.customClearGuides.addEventListener("click", clearCustomGuides);
-els.customSliceImage.addEventListener("load", () => {
-  requestAnimationFrame(positionCustomGrid);
-});
 els.resetBtn.addEventListener("click", resetTool);
 els.clearQueueBtn.addEventListener("click", clearQueue);
 els.downloadBtn.addEventListener("click", downloadZip);
@@ -3270,6 +3287,5 @@ window.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("resize", debounce(drawPreview, 120));
-window.addEventListener("resize", debounce(positionCustomGrid, 120));
 
 resetTool();
