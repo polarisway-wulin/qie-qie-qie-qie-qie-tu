@@ -808,10 +808,6 @@ function closeCustomSliceEditor() {
 function buildCustomSlices(image) {
   const xStops = [0, ...customGridState.vertical, 1];
   const yStops = [0, ...customGridState.horizontal, 1];
-  const result = [];
-  const imageData = image.canvas.getContext("2d", { willReadFrequently: true })
-    .getImageData(0, 0, image.width, image.height);
-  const background = getBackgroundColor(imageData);
   const boxes = [];
 
   for (let row = 0; row < yStops.length - 1; row += 1) {
@@ -824,29 +820,16 @@ function buildCustomSlices(image) {
       const y = Math.round(yStops[row] * image.height);
       const right = Math.round(xStops[column + 1] * image.width);
       const bottom = Math.round(yStops[row + 1] * image.height);
-      const box = {
+      boxes.push({
         x,
         y,
         w: Math.max(1, right - x),
         h: Math.max(1, bottom - y),
-      };
-      if (boxHasVisibleContent(box, imageData.data, background, image.width, image.height)) {
-        boxes.push(box);
-      }
-    }
-  }
-
-  boxes.forEach((box, index) => {
-      result.push({
-        ...box,
-        index,
-        source: image,
-        imageId: image.id,
-        name: buildSliceName(index, image.fileName),
         customOutput: true,
       });
-  });
-  return result;
+    }
+  }
+  return boxes;
 }
 
 function applyCustomSlices() {
@@ -855,35 +838,18 @@ function applyCustomSlices() {
   }
 
   const customImage = customGridImage;
-  const customSlices = buildCustomSlices(customImage);
-  if (!customSlices.length) {
-    alert("当前网格内没有识别到可导出的内容，请调整分割线后再试。");
-    return;
-  }
 
   isProcessing = true;
   updateActions("处理中...");
   try {
-    customImage.manualSlices = customSlices.map((slice) => ({
-      x: slice.x,
-      y: slice.y,
-      w: slice.w,
-      h: slice.h,
-      customOutput: true,
-    }));
+    customImage.manualSlices = buildCustomSlices(customImage);
     customImage.manualGrid = {
       vertical: [...customGridState.vertical],
       horizontal: [...customGridState.horizontal],
     };
     for (const image of images) {
       setActiveImage(image);
-      image.slices = autoSlicesOrOriginal(image).map((slice, index) => ({
-          ...slice,
-          index,
-          source: image,
-          imageId: image.id,
-          name: buildSliceName(index, image.fileName),
-        }));
+      image.slices = autoSlicesOrOriginal(image);
     }
     slices = images.flatMap((image) => image.slices);
     hasRunBatch = true;
@@ -928,18 +894,12 @@ function getPreviewSlices(image) {
     return [];
   }
 
-  if (hasRunBatch && image.slices.length) {
+  if (hasRunBatch) {
     return image.slices;
   }
 
   setActiveImage(image);
-  return autoSlicesOrOriginal(image).map((slice, index) => ({
-    ...slice,
-    index,
-    source: image,
-    imageId: image.id,
-    name: buildSliceName(index, image.fileName),
-  }));
+  return autoSlicesOrOriginal(image);
 }
 
 function markNeedsConfirm() {
@@ -1062,22 +1022,20 @@ function hasStandardLandscapeStack(boxes, imageWidth, imageHeight) {
 }
 
 function autoSlicesOrOriginal(image) {
-  if (image.manualSlices?.length) {
-    return image.manualSlices.map((slice, index) => ({
-      ...slice,
-      index,
-      source: image,
-      imageId: image.id,
-      name: buildSliceName(index, image.fileName),
-      customOutput: true,
-    }));
+  let candidates = image.manualSlices;
+  if (!candidates) {
+    const detectedSlices = autoDetectSlices();
+    candidates = hasStandardPhoneRow(detectedSlices, image.width, image.height) ||
+      hasStandardLandscapeStack(detectedSlices, image.width, image.height)
+      ? detectedSlices
+      : [createOriginalOutputSlice(image)];
   }
 
-  const detectedSlices = autoDetectSlices();
-  return hasStandardPhoneRow(detectedSlices, image.width, image.height) ||
-    hasStandardLandscapeStack(detectedSlices, image.width, image.height)
-    ? detectedSlices
-    : [createOriginalOutputSlice(image)];
+  return filterVisibleSlices(
+    candidates.map((slice) => ({ ...slice, source: image, imageId: image.id })),
+    (slice) => renderSliceCanvas(slice, els.exportFormat.value),
+    (index) => buildSliceName(index, image.fileName),
+  );
 }
 
 async function runSlice() {
@@ -2534,10 +2492,10 @@ function drawPreview() {
   const previewPadding = 34;
   const previewWidth = previewSlices.length
     ? previewSlices.reduce((total, slice) => total + slice.w, 0) + previewGap * Math.max(0, previewSlices.length - 1) + previewPadding * 2
-    : image.width;
+    : 320;
   const previewHeight = previewSlices.length
     ? Math.max(...previewSlices.map((slice) => slice.h)) + previewPadding * 2
-    : image.height;
+    : 320;
   els.emptyState.classList.add("is-hidden");
   els.imageMeta.textContent = `${image.displayName} · ${image.width} × ${image.height}px · 队列 ${images.length} 张`;
   const wrap = els.previewCanvas.parentElement;
@@ -2632,9 +2590,9 @@ function drawPreview() {
       ? `已生成 ${slices.length} 个输出，当前预览 ${image.displayName}，${currentModeText}`
       : "未识别到可切区域";
   } else {
-    els.sliceMeta.textContent = images.length
+    els.sliceMeta.textContent = previewSlices.length
       ? `已预览切图效果，队列 ${images.length} 张，等待确认导出`
-      : "等待切图";
+      : "未识别到可切区域";
   }
   renderPreviewLinks(previewItems, displayWidth, displayHeight);
 }
@@ -3105,6 +3063,8 @@ async function exportToFolder() {
 function updateActions(sliceButtonText = "") {
   els.downloadBtn.disabled = isProcessing || !hasRunBatch || !slices.length;
   els.exportFolderBtn.disabled = isProcessing || !hasRunBatch || !slices.length;
+  els.backgroundMode.disabled = isProcessing;
+  els.exportFormat.disabled = isProcessing;
   els.customSliceBtn.disabled = isProcessing || !images.length;
   els.sliceBtn.disabled = isProcessing || !images.length;
   els.clearQueueBtn.disabled = isProcessing || !images.length;
@@ -3190,12 +3150,18 @@ els.dropZone.addEventListener("drop", async (event) => {
 
 els.exportFormat.addEventListener("change", () => {
   updateNamePreview();
-  renderThumbs();
-  drawPreview();
+  if (hasRunBatch) {
+    runSlice();
+  } else {
+    drawPreview();
+  }
 });
 els.backgroundMode.addEventListener("change", () => {
-  renderThumbs();
-  drawPreview();
+  if (hasRunBatch) {
+    runSlice();
+  } else {
+    drawPreview();
+  }
 });
 els.alphaThreshold.addEventListener("input", () => {
   els.alphaOutput.textContent = els.alphaThreshold.value;

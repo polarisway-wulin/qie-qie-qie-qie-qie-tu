@@ -487,18 +487,12 @@ function getPreviewSlices(image) {
     return [];
   }
 
-  if (hasRunBatch && image.slices.length) {
+  if (hasRunBatch) {
     return image.slices;
   }
 
   setActiveImage(image);
-  return autoSlicesOrOriginal(image).map((slice, index) => ({
-    ...slice,
-    index,
-    source: image,
-    imageId: image.id,
-    name: buildSliceName(index, image.fileName),
-  }));
+  return autoSlicesOrOriginal(image);
 }
 
 function markNeedsConfirm() {
@@ -783,7 +777,11 @@ function detectFiveLayoutSlices() {
 
 function autoSlicesOrOriginal(image) {
   const detectedSlices = detectFiveLayoutSlices();
-  return detectedSlices.length === 5 ? detectedSlices : [createOriginalOutputSlice(image)];
+  return filterVisibleSlices(
+    detectedSlices.length === 5 ? detectedSlices : [createOriginalOutputSlice(image)],
+    (slice) => renderSliceCanvas(slice, els.exportFormat.value),
+    (index) => buildSliceName(index, image.fileName),
+  );
 }
 
 async function runSlice() {
@@ -1456,10 +1454,10 @@ function drawPreview() {
   const previewPadding = 34;
   const previewWidth = previewSlices.length
     ? previewSlices.reduce((total, slice) => total + slice.w, 0) + previewGap * Math.max(0, previewSlices.length - 1) + previewPadding * 2
-    : image.width;
+    : 320;
   const previewHeight = previewSlices.length
     ? Math.max(...previewSlices.map((slice) => slice.h)) + previewPadding * 2
-    : image.height;
+    : 320;
   els.emptyState.classList.add("is-hidden");
   els.imageMeta.textContent = `${image.displayName} · ${image.width} × ${image.height}px · 队列 ${images.length} 张`;
   const wrap = els.previewCanvas.parentElement;
@@ -1553,9 +1551,9 @@ function drawPreview() {
       ? `已生成 ${slices.length} 个输出，当前预览 ${image.displayName}，${currentModeText}`
       : "未识别到可切区域";
   } else {
-    els.sliceMeta.textContent = images.length
+    els.sliceMeta.textContent = previewSlices.length
       ? `已预览切图效果，队列 ${images.length} 张，等待确认导出`
-      : "等待切图";
+      : "未识别到可切区域";
   }
   renderPreviewLinks(previewItems, displayWidth, displayHeight);
 }
@@ -2003,6 +2001,8 @@ async function exportToFolder() {
 function updateActions(sliceButtonText = "") {
   els.downloadBtn.disabled = isProcessing || !hasRunBatch || !slices.length;
   els.exportFolderBtn.disabled = isProcessing || !hasRunBatch || !slices.length;
+  els.backgroundMode.disabled = isProcessing;
+  els.exportFormat.disabled = isProcessing;
   els.sliceBtn.disabled = isProcessing || !images.length;
   els.clearQueueBtn.disabled = isProcessing || !images.length;
 
@@ -2087,12 +2087,18 @@ els.dropZone.addEventListener("drop", async (event) => {
 
 els.exportFormat.addEventListener("change", () => {
   updateNamePreview();
-  renderThumbs();
-  drawPreview();
+  if (hasRunBatch) {
+    runSlice();
+  } else {
+    drawPreview();
+  }
 });
 els.backgroundMode.addEventListener("change", () => {
-  renderThumbs();
-  drawPreview();
+  if (hasRunBatch) {
+    runSlice();
+  } else {
+    drawPreview();
+  }
 });
 els.alphaThreshold.addEventListener("input", () => {
   els.alphaOutput.textContent = els.alphaThreshold.value;
