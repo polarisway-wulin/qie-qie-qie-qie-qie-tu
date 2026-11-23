@@ -75,6 +75,7 @@ let lightboxSlices = [];
 let lightboxIndex = 0;
 let customGridState = { columns: 1, rows: 1, vertical: [], horizontal: [] };
 let customGridImage = null;
+let customGuideBands = null;
 let selectedCustomGuide = null;
 const activeSliceSaves = new Set();
 
@@ -491,116 +492,82 @@ function resetTool() {
   updateActions();
 }
 
-function getGridStops(count) {
-  return Array.from({ length: Math.max(0, count - 1) }, (_, index) => (index + 1) / count);
-}
-
-function groupBoxesIntoRows(boxes) {
-  const sorted = [...boxes].sort((a, b) => boxCenterY(a) - boxCenterY(b) || a.x - b.x);
-  const heights = sorted.map((box) => box.h).sort((a, b) => a - b);
-  const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
-  const tolerance = Math.max(40, medianHeight * 0.42);
-  const rows = [];
-
-  sorted.forEach((box) => {
-    const centerY = boxCenterY(box);
-    const row = rows.find((candidate) => Math.abs(candidate.centerY - centerY) <= tolerance);
-    if (row) {
-      row.boxes.push(box);
-      row.centerY = row.boxes.reduce((sum, item) => sum + boxCenterY(item), 0) / row.boxes.length;
-    } else {
-      rows.push({ centerY, boxes: [box] });
+function findBlankBands(counts, minWidth) {
+  const bands = [];
+  let start = 0;
+  for (let end = 0; end <= counts.length; end += 1) {
+    if (end < counts.length && !counts[end]) {
+      continue;
     }
-  });
-
-  return rows
-    .sort((a, b) => a.centerY - b.centerY)
-    .map((row) => row.boxes.sort((a, b) => a.x - b.x));
+    if (end - start >= minWidth) {
+      bands.push({ start, end });
+    }
+    start = end + 1;
+  }
+  return bands;
 }
 
-function detectLandscapeRowBoundaries(image) {
-  const ctx = image.canvas.getContext("2d", { willReadFrequently: true });
-  const imageData = ctx.getImageData(0, 0, image.width, image.height);
+function getCustomGuideBands(image) {
+  const { width, height, canvas } = image;
+  const imageData = canvas.getContext("2d").getImageData(0, 0, width, height);
   const background = getBackgroundColor(imageData);
-  const rowDensity = new Uint32Array(image.height);
-  const xStep = image.width > 2400 ? 3 : 2;
+  const columns = new Uint32Array(width);
+  const rows = new Uint32Array(height);
 
-  for (let y = 0; y < image.height; y += 1) {
-    let count = 0;
-    for (let x = 0; x < image.width; x += xStep) {
-      const index = (y * image.width + x) * 4;
-      if (
-        Math.abs(imageData.data[index] - background[0]) > 10 ||
-        Math.abs(imageData.data[index + 1] - background[1]) > 10 ||
-        Math.abs(imageData.data[index + 2] - background[2]) > 10 ||
-        Math.abs(imageData.data[index + 3] - background[3]) > 10
-      ) {
-        count += 1;
+  // Keep these guides stricter than automatic crop recognition, even with a high color tolerance.
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (isContentPixel(imageData.data, (y * width + x) * 4, background, 4, 6, true)) {
+        columns[x] += 1;
+        rows[y] += 1;
       }
     }
-    rowDensity[y] = count;
   }
 
-  const threshold = Math.max(4, Math.round(image.width / xStep * 0.004));
-  const minRunHeight = Math.max(120, image.height * 0.12);
-  const runs = [];
-  let start = -1;
+  const normalize = (counts) => findBlankBands(counts, Math.max(4, Math.ceil(counts.length * 0.008)))
+    .map(({ start, end }) => ({
+      start: start / counts.length,
+      end: end / counts.length,
+    }))
+    .sort((a, b) => (b.end - b.start) - (a.end - a.start));
 
-  for (let y = 0; y < image.height; y += 1) {
-    if (rowDensity[y] >= threshold) {
-      if (start < 0) {
-        start = y;
-      }
-    } else if (start >= 0) {
-      if (y - start >= minRunHeight) {
-        runs.push({ start, end: y });
-      }
-      start = -1;
-    }
-  }
-  if (start >= 0 && image.height - start >= minRunHeight) {
-    runs.push({ start, end: image.height });
-  }
-
-  if (runs.length < 2 || runs.length > 12) {
-    return [];
-  }
-
-  return runs.slice(0, -1).map((run, index) => {
-    const next = runs[index + 1];
-    return clamp((run.end + next.start) / 2 / image.height, 0.02, 0.98);
-  });
+  return { vertical: normalize(columns), horizontal: normalize(rows) };
 }
 
-function guessCustomGrid(image) {
-  const landscapeRows = detectLandscapeRowBoundaries(image);
-  if (landscapeRows.length) {
-    return { vertical: [], horizontal: landscapeRows };
+function isInteriorGuideBand(band) {
+  return band.start > 0 && band.end < 1;
+}
+
+function chooseCustomGuide(bands, stops) {
+  for (const { start, end } of bands) {
+    if (stops.some((stop) => stop >= start && stop <= end)) {
+      continue;
+    }
+
+    const position = (start + end) / 2;
+    if (position >= 0.02 && position <= 0.98 &&
+        stops.every((stop) => Math.abs(position - stop) >= 0.02)) {
+      return position;
+    }
   }
+  return null;
+}
 
-  const detected = autoDetectSlices();
-  const usefulDetected = detected.filter((box) => box.w > 0 && box.h > 0);
+function guessCustomGrid() {
+  const suggestions = (direction) => {
+    const bands = customGuideBands[direction].filter(isInteriorGuideBand);
+    const stops = [];
+    while (stops.length < 11) {
+      const position = chooseCustomGuide(bands, stops);
+      if (position === null) {
+        break;
+      }
+      stops.push(position);
+    }
+    return stops;
+  };
 
-  if (usefulDetected.length > 1) {
-    const detectedRows = groupBoxesIntoRows(usefulDetected);
-    const widestRow = [...detectedRows].sort((a, b) => b.length - a.length)[0];
-    const horizontal = detectedRows.slice(0, -1).map((row, index) => {
-      const next = detectedRows[index + 1];
-      const bottom = Math.max(...row.map((box) => box.y + box.h));
-      const top = Math.min(...next.map((box) => box.y));
-      return clamp((bottom + top) / 2 / image.height, 0.02, 0.98);
-    });
-    const vertical = widestRow.slice(0, -1).map((box, index) => {
-      const next = widestRow[index + 1];
-      return clamp((box.x + box.w + next.x) / 2 / image.width, 0.02, 0.98);
-    });
-    return { vertical, horizontal };
-  }
-
-  // Documentation screenshots are commonly stacked at roughly a 2:1
-  // landscape ratio. This gives 976 three rows and 977 two rows.
-  const estimatedRows = clamp(Math.round(image.height / Math.max(1, image.width * 0.52)), 1, 12);
-  return { vertical: [], horizontal: getGridStops(Math.max(1, estimatedRows)) };
+  return { vertical: suggestions("vertical"), horizontal: suggestions("horizontal") };
 }
 
 function setCustomGuides(guides = {}) {
@@ -627,20 +594,7 @@ function resetCustomGrid() {
     setCustomGuides();
     return;
   }
-  setActiveImage(customGridImage);
-  setCustomGuides(guessCustomGrid(customGridImage));
-}
-
-function largestGuideGap(stops) {
-  const boundaries = [0, ...stops, 1];
-  let largest = { start: 0, end: 1, size: 1 };
-  for (let index = 0; index < boundaries.length - 1; index += 1) {
-    const size = boundaries[index + 1] - boundaries[index];
-    if (size > largest.size || index === 0) {
-      largest = { start: boundaries[index], end: boundaries[index + 1], size };
-    }
-  }
-  return (largest.start + largest.end) / 2;
+  setCustomGuides(guessCustomGrid());
 }
 
 function addCustomGuide(direction) {
@@ -648,7 +602,15 @@ function addCustomGuide(direction) {
   if (stops.length >= 11) {
     return;
   }
-  const position = largestGuideGap(stops);
+  const bands = customGuideBands[direction];
+  const interior = bands.filter(isInteriorGuideBand);
+  const position = chooseCustomGuide(interior.length ? interior : bands, stops);
+  if (position === null) {
+    els.customSliceCount.textContent = direction === "vertical"
+      ? "没有可用的纵向空白带"
+      : "没有可用的横向空白带";
+    return;
+  }
   stops.push(position);
   stops.sort((a, b) => a - b);
   customGridState.columns = customGridState.vertical.length + 1;
@@ -785,12 +747,13 @@ function openCustomSliceEditor() {
   }
 
   customGridImage = image;
+  customGuideBands = getCustomGuideBands(image);
   els.customSliceImage.src = image.canvas.toDataURL("image/png");
   els.customSliceMeta.textContent = `${image.displayName} · ${image.width} × ${image.height}px · 拖动横线和竖线调整切片范围`;
   els.customSliceModal.classList.remove("is-hidden");
   document.body.classList.add("has-lightbox");
   setActiveImage(image);
-  setCustomGuides(image.manualGrid || guessCustomGrid(image));
+  setCustomGuides(image.manualGrid || guessCustomGrid());
 }
 
 function closeCustomSliceEditor() {
@@ -800,6 +763,7 @@ function closeCustomSliceEditor() {
   els.customSliceModal.classList.add("is-hidden");
   els.customSliceImage.removeAttribute("src");
   customGridImage = null;
+  customGuideBands = null;
   if (els.sliceLightbox?.classList.contains("is-hidden")) {
     document.body.classList.remove("has-lightbox");
   }
@@ -1025,7 +989,8 @@ function autoSlicesOrOriginal(image) {
   let candidates = image.manualSlices;
   if (!candidates) {
     const detectedSlices = autoDetectSlices();
-    candidates = hasStandardPhoneRow(detectedSlices, image.width, image.height) ||
+    candidates = detectedSlices[0]?.fourImageGrid ||
+      hasStandardPhoneRow(detectedSlices, image.width, image.height) ||
       hasStandardLandscapeStack(detectedSlices, image.width, image.height)
       ? detectedSlices
       : [createOriginalOutputSlice(image)];
@@ -1178,13 +1143,15 @@ function isTitleForImage(title, image, imageHeight) {
   );
 }
 
-function cropMaskBand(mask, padding, imageWidth, imageHeight, leftLimit, rightLimit) {
+function cropMaskBand(
+  mask, padding, imageWidth, imageHeight, leftLimit, rightLimit, topLimit = 0, bottomLimit = imageHeight,
+) {
   let minX = rightLimit;
   let maxX = leftLimit;
   let minY = imageHeight;
   let maxY = 0;
 
-  for (let y = 0; y < imageHeight; y += 1) {
+  for (let y = topLimit; y < bottomLimit; y += 1) {
     const rowOffset = y * imageWidth;
     for (let x = leftLimit; x < rightLimit; x += 1) {
       if (!mask[rowOffset + x]) {
@@ -2242,6 +2209,88 @@ function detectProjectionColumnRuns(mask, imageWidth, imageHeight) {
   return runs;
 }
 
+function getSeparatedSpans(counts) {
+  const first = counts.findIndex((count) => count > 0);
+  if (first < 0) {
+    return [];
+  }
+
+  let last = counts.length;
+  while (!counts[last - 1]) {
+    last -= 1;
+  }
+
+  const minGap = Math.max(4, Math.ceil(counts.length * 0.012));
+  const gaps = findBlankBands(counts, minGap)
+    .filter(({ start, end }) => start > first && end < last);
+  const starts = [first, ...gaps.map(({ end }) => end)];
+  const ends = [...gaps.map(({ start }) => start), last];
+  const limits = [0, ...gaps.map(({ start, end }) => Math.round((start + end) / 2)), counts.length];
+
+  return starts.map((start, index) => ({
+    start,
+    end: ends[index],
+    lowerLimit: limits[index],
+    upperLimit: limits[index + 1],
+  }));
+}
+
+function detectFourImageGrid(mask, width, height, padding) {
+  const rowCounts = new Uint32Array(height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      rowCounts[y] += mask[y * width + x];
+    }
+  }
+
+  const rows = getSeparatedSpans(rowCounts);
+  if (rows.length !== 2 || rows.some((row) => row.end - row.start < height * 0.2)) {
+    return [];
+  }
+
+  const cells = [];
+  for (const row of rows) {
+    const columnCounts = new Uint32Array(width);
+    for (let y = row.start; y < row.end; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        columnCounts[x] += mask[y * width + x];
+      }
+    }
+
+    const columns = getSeparatedSpans(columnCounts);
+    if (columns.length < 1 || columns.length > 3 ||
+        columns.some((column) => column.end - column.start < width * 0.13)) {
+      return [];
+    }
+    for (const column of columns) {
+      const box = cropMaskBand(mask, 0, width, height, column.start, column.end, row.start, row.end);
+      if (!box || box.h < height * 0.2) {
+        return [];
+      }
+      cells.push({ box, row, column });
+    }
+  }
+
+  if (cells.length !== 4) {
+    return [];
+  }
+  const widths = cells.map(({ box }) => box.w);
+  const heights = cells.map(({ box }) => box.h);
+  if (Math.max(...widths) > Math.min(...widths) * 1.4 ||
+      Math.max(...heights) > Math.min(...heights) * 1.4) {
+    return [];
+  }
+
+  // Limit padding to each cell's side of the gutter so neighboring content cannot leak in.
+  return cells.map(({ box, row, column }) => {
+    const x = Math.max(box.x - padding, column.lowerLimit);
+    const y = Math.max(box.y - padding, row.lowerLimit);
+    const right = Math.min(box.x + box.w + padding, column.upperLimit);
+    const bottom = Math.min(box.y + box.h + padding, row.upperLimit);
+    return { x, y, w: right - x, h: bottom - y, fourImageGrid: true };
+  });
+}
+
 function autoDetectSlices() {
   const width = sourceCanvas.width;
   const height = sourceCanvas.height;
@@ -2290,6 +2339,13 @@ function autoDetectSlices() {
   const transitionArrows = removeTransitionArrows(mask, data, width, height);
   if (recoveryMask !== mask) {
     removeTransitionArrows(recoveryMask, data, width, height);
+  }
+
+  if (!transitionArrows.length) {
+    const fourImageGrid = detectFourImageGrid(recoveryMask, width, height, padding);
+    if (fourImageGrid.length) {
+      return sortSnakeReadingOrder(fourImageGrid).map(createSlice);
+    }
   }
 
   const visited = new Uint8Array(mask.length);
