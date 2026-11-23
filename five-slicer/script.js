@@ -1523,7 +1523,7 @@ function drawPreview() {
   previewCtx.imageSmoothingEnabled = previewItems.some((item) => item.scale !== 1);
   previewCtx.imageSmoothingQuality = "high";
   previewCtx.lineWidth = 2;
-  previewCtx.strokeStyle = "#d88a25";
+  const guideColor = getComputedStyle(els.previewCanvas).getPropertyValue("--slice-guide").trim();
   previewCtx.font = "700 14px sans-serif";
 
   previewItems.forEach(({ slice, x, y, w, h }) => {
@@ -1533,7 +1533,7 @@ function drawPreview() {
     const frameH = Math.min(displayHeight - frameY, h + framePad * 2);
     previewCtx.fillStyle = "#ffffff";
     previewCtx.fillRect(frameX, frameY, frameW, frameH);
-    previewCtx.strokeStyle = "#d88a25";
+    previewCtx.strokeStyle = guideColor;
     previewCtx.lineWidth = isSingleSlicePreview ? 4 : 3;
     previewCtx.strokeRect(frameX + 1, frameY + 1, Math.max(1, frameW - 2), Math.max(1, frameH - 2));
     if (els.backgroundMode.value === "white") {
@@ -1541,7 +1541,7 @@ function drawPreview() {
       previewCtx.fillRect(x, y, w, h);
     }
     previewCtx.drawImage(image.canvas, slice.x, slice.y, slice.w, slice.h, x, y, w, h);
-    previewCtx.fillStyle = "#d88a25";
+    previewCtx.fillStyle = guideColor;
     previewCtx.fillText(String(slice.index + 1), frameX + 4, Math.max(18, frameY - 8));
   });
 
