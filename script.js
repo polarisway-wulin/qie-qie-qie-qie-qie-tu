@@ -16,6 +16,7 @@ const els = {
   customSliceCancel: document.querySelector("#customSliceCancel"),
   customSliceRestore: document.querySelector("#customSliceRestore"),
   customSliceApply: document.querySelector("#customSliceApply"),
+  customSliceTitle: document.querySelector("#customSliceTitle"),
   customSliceImage: document.querySelector("#customSliceImage"),
   customSliceStage: document.querySelector("#customSliceStage"),
   customGrid: document.querySelector("#customGrid"),
@@ -54,6 +55,7 @@ const els = {
   namePreview: document.querySelector("#namePreview"),
   sliceLightbox: document.querySelector("#sliceLightbox"),
   lightboxClose: document.querySelector("#lightboxClose"),
+  lightboxRefine: document.querySelector("#lightboxRefine"),
   lightboxImage: document.querySelector("#lightboxImage"),
   lightboxCaption: document.querySelector("#lightboxCaption"),
 };
@@ -75,6 +77,7 @@ let lightboxSlices = [];
 let lightboxIndex = 0;
 let customGridState = { columns: 1, rows: 1, vertical: [], horizontal: [] };
 let customGridImage = null;
+let customGridSlice = null;
 let customGuideBands = null;
 let selectedCustomGuide = null;
 const activeSliceSaves = new Set();
@@ -662,6 +665,7 @@ function deleteSelectedCustomGuide() {
 function updateCustomGridLabel() {
   const count = customGridState.columns * customGridState.rows;
   els.customSliceCount.textContent = `${count} 个区域 · 纯空白区域不会导出`;
+  els.customSliceApply.disabled = Boolean(customGridSlice && count === 1);
 }
 
 function renderCustomGrid() {
@@ -783,22 +787,42 @@ function startCustomGridDrag(event) {
   line.addEventListener("lostpointercapture", end, { signal: drag.signal });
 }
 
-function openCustomSliceEditor() {
-  const image = activeSourceRecord || images[0];
+function canRefineSlice(slice) {
+  return hasRunBatch && slice?.source?.slices.includes(slice) && (slice.w > 1 || slice.h > 1);
+}
+
+function openSliceRefinement(slice) {
+  if (isProcessing || !canRefineSlice(slice)) {
+    return;
+  }
+
+  closeSliceViewer();
+  openCustomSliceEditor(slice.source, slice);
+}
+
+function openCustomSliceEditor(image = activeSourceRecord || images[0], slice = null) {
   if (!image || isProcessing) {
     return;
   }
 
-  customGridImage = image;
-  customGuideBands = getCustomGuideBands(image);
-  els.customSliceImage.width = image.width;
-  els.customSliceImage.height = image.height;
-  els.customSliceImage.src = image.canvas.toDataURL("image/png");
-  els.customSliceMeta.textContent = `${image.displayName} · ${image.width} × ${image.height}px · 拖动横线和竖线调整切片范围`;
+  customGridSlice = slice;
+  customGridImage = slice
+    ? { canvas: renderSliceCanvas(slice, "png"), width: slice.w, height: slice.h }
+    : image;
+  const { canvas, width, height } = customGridImage;
+  const label = slice ? getExportFileName(slice) : image.displayName;
+  customGuideBands = getCustomGuideBands(customGridImage);
+  els.customSliceTitle.textContent = slice ? "继续切图" : "自定义切图";
+  els.customSliceRestore.hidden = Boolean(slice);
+  els.customSliceImage.width = width;
+  els.customSliceImage.height = height;
+  els.customSliceImage.src = canvas.toDataURL("image/png");
+  els.customSliceMeta.textContent = `${label} · ${width} × ${height}px · 拖动横线和竖线调整切片范围`;
   els.customSliceModal.classList.remove("is-hidden");
+  els.customSliceStage.scrollTop = 0;
   document.body.classList.add("has-lightbox");
   setActiveImage(image);
-  setCustomGuides(image.manualGrid || guessCustomGrid());
+  setCustomGuides((!slice && image.manualGrid) || guessCustomGrid());
 }
 
 function closeCustomSliceEditor() {
@@ -808,6 +832,7 @@ function closeCustomSliceEditor() {
   els.customSliceModal.classList.add("is-hidden");
   els.customSliceImage.removeAttribute("src");
   customGridImage = null;
+  customGridSlice = null;
   customGuideBands = null;
   if (els.sliceLightbox?.classList.contains("is-hidden")) {
     document.body.classList.remove("has-lightbox");
@@ -846,19 +871,39 @@ function applyCustomSlices() {
     return;
   }
 
-  const customImage = customGridImage;
+  const parent = customGridSlice;
+  if (parent && !canRefineSlice(parent)) {
+    closeCustomSliceEditor();
+    return;
+  }
+  const boxes = buildCustomSlices(customGridImage);
+  if (parent && boxes.length < 2) {
+    return;
+  }
+  const customImage = parent ? parent.source : customGridImage;
 
   isProcessing = true;
   updateActions("处理中...");
   try {
-    customImage.manualSlices = buildCustomSlices(customImage);
-    customImage.manualGrid = {
-      vertical: [...customGridState.vertical],
-      horizontal: [...customGridState.horizontal],
-    };
-    for (const image of images) {
-      setActiveImage(image);
-      image.slices = autoSlicesOrOriginal(image);
+    if (parent) {
+      const candidates = [...(customImage.manualSlices || customImage.slices)];
+      const index = customImage.manualSlices
+        ? parent.manualSliceIndex
+        : customImage.slices.indexOf(parent);
+      const children = boxes.map((box) => cropExistingSlice(parent, box));
+      candidates.splice(index, 1, ...children);
+      customImage.manualSlices = candidates;
+      customImage.slices = autoSlicesOrOriginal(customImage);
+    } else {
+      customImage.manualSlices = boxes;
+      customImage.manualGrid = {
+        vertical: [...customGridState.vertical],
+        horizontal: [...customGridState.horizontal],
+      };
+      for (const image of images) {
+        setActiveImage(image);
+        image.slices = autoSlicesOrOriginal(image);
+      }
     }
     slices = images.flatMap((image) => image.slices);
     hasRunBatch = true;
@@ -876,7 +921,7 @@ function applyCustomSlices() {
 }
 
 function restoreCustomSliceToAuto() {
-  if (!customGridImage || isProcessing) {
+  if (!customGridImage || customGridSlice || isProcessing) {
     return;
   }
 
@@ -1042,7 +1087,12 @@ function autoSlicesOrOriginal(image) {
   }
 
   return filterVisibleSlices(
-    candidates.map((slice) => ({ ...slice, source: image, imageId: image.id })),
+    candidates.map((slice, index) => ({
+      ...slice,
+      source: image,
+      imageId: image.id,
+      manualSliceIndex: image.manualSlices ? index : undefined,
+    })),
     (slice) => renderSliceCanvas(slice, els.exportFormat.value),
     (index) => buildSliceName(index, image.fileName),
   );
@@ -2718,6 +2768,7 @@ function renderThumbs() {
     const img = document.createElement("img");
     const label = document.createElement("span");
     const saveButton = document.createElement("button");
+    const actions = document.createElement("div");
     const fileName = getExportFileName(slice);
     const dataUrl = renderSliceDataUrl(slice, els.exportFormat.value);
     item.className = "thumb";
@@ -2743,8 +2794,18 @@ function renderThumbs() {
     saveButton.type = "button";
     saveButton.textContent = "另存为";
     saveButton.addEventListener("click", () => saveSliceAs(slice, saveButton));
+    actions.className = "thumb-actions";
+    if (canRefineSlice(slice)) {
+      const refineButton = document.createElement("button");
+      refineButton.className = "save-button";
+      refineButton.type = "button";
+      refineButton.textContent = "继续切图";
+      refineButton.addEventListener("click", () => openSliceRefinement(slice));
+      actions.append(refineButton);
+    }
+    actions.append(saveButton);
     mediaLink.append(img);
-    item.append(mediaLink, label, saveButton);
+    item.append(mediaLink, label, actions);
     fragment.append(item);
   });
   els.thumbGrid.append(fragment);
@@ -2790,6 +2851,38 @@ function renderPreviewLinks(previewItems, displayWidth, displayHeight) {
   els.previewLinks.append(fragment);
 }
 
+function getSliceSourceRect(slice) {
+  return {
+    sourceX: slice.sourceX ?? slice.x,
+    sourceY: slice.sourceY ?? slice.y,
+    sourceW: slice.sourceW ?? slice.w,
+    sourceH: slice.sourceH ?? slice.h,
+    drawOffsetX: slice.drawOffsetX ?? 0,
+    drawOffsetY: slice.drawOffsetY ?? 0,
+  };
+}
+
+function cropExistingSlice(parent, box) {
+  const source = getSliceSourceRect(parent);
+  const left = Math.max(box.x, source.drawOffsetX);
+  const top = Math.max(box.y, source.drawOffsetY);
+  const right = Math.min(box.x + box.w, source.drawOffsetX + source.sourceW);
+  const bottom = Math.min(box.y + box.h, source.drawOffsetY + source.sourceH);
+
+  // Map the child back to the original pixels, including any padding or redactions.
+  return {
+    ...box,
+    sourceX: source.sourceX + left - source.drawOffsetX,
+    sourceY: source.sourceY + top - source.drawOffsetY,
+    sourceW: Math.max(0, right - left),
+    sourceH: Math.max(0, bottom - top),
+    drawOffsetX: left - box.x,
+    drawOffsetY: top - box.y,
+    forceWhiteCanvas: parent.forceWhiteCanvas,
+    redactions: parent.redactions?.map((area) => ({ ...area, x: area.x - box.x, y: area.y - box.y })),
+  };
+}
+
 function renderSliceCanvas(slice, format) {
   const source = slice.source || activeSourceRecord;
   const sourceImageCanvas = source?.canvas || sourceCanvas;
@@ -2803,23 +2896,10 @@ function renderSliceCanvas(slice, format) {
     ctx.fillRect(0, 0, slice.w, slice.h);
   }
 
-  const sourceX = slice.sourceX ?? slice.x;
-  const sourceY = slice.sourceY ?? slice.y;
-  const sourceW = slice.sourceW ?? slice.w;
-  const sourceH = slice.sourceH ?? slice.h;
-  const drawOffsetX = slice.drawOffsetX ?? 0;
-  const drawOffsetY = slice.drawOffsetY ?? 0;
-  ctx.drawImage(
-    sourceImageCanvas,
-    sourceX,
-    sourceY,
-    sourceW,
-    sourceH,
-    drawOffsetX,
-    drawOffsetY,
-    sourceW,
-    sourceH,
-  );
+  const { sourceX, sourceY, sourceW, sourceH, drawOffsetX, drawOffsetY } = getSliceSourceRect(slice);
+  if (sourceW > 0 && sourceH > 0) {
+    ctx.drawImage(sourceImageCanvas, sourceX, sourceY, sourceW, sourceH, drawOffsetX, drawOffsetY, sourceW, sourceH);
+  }
 
   if (slice.redactions?.length) {
     ctx.fillStyle = "#ffffff";
@@ -2887,6 +2967,7 @@ function setLightboxSlice(index) {
   }
 
   const slice = lightboxSlices[lightboxIndex];
+  els.lightboxRefine.hidden = !canRefineSlice(slice);
   const fileName = getExportFileName(slice);
   activeLightboxUrl = createSliceObjectUrl(slice);
   els.lightboxImage.src = activeLightboxUrl;
@@ -3275,7 +3356,7 @@ els.colorTolerance.addEventListener("input", () => {
   els.toleranceOutput.textContent = els.colorTolerance.value;
 });
 els.sliceBtn.addEventListener("click", runSlice);
-els.customSliceBtn.addEventListener("click", openCustomSliceEditor);
+els.customSliceBtn.addEventListener("click", () => openCustomSliceEditor());
 els.customSliceClose.addEventListener("click", closeCustomSliceEditor);
 els.customSliceCancel.addEventListener("click", closeCustomSliceEditor);
 els.customSliceApply.addEventListener("click", applyCustomSlices);
@@ -3290,6 +3371,7 @@ els.clearQueueBtn.addEventListener("click", clearQueue);
 els.downloadBtn.addEventListener("click", downloadZip);
 els.exportFolderBtn.addEventListener("click", exportToFolder);
 els.lightboxClose.addEventListener("click", closeSliceViewer);
+els.lightboxRefine.addEventListener("click", () => openSliceRefinement(lightboxSlices[lightboxIndex]));
 els.sliceLightbox.addEventListener("click", (event) => {
   if (event.target === els.sliceLightbox) {
     closeSliceViewer();

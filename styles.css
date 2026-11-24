@@ -675,6 +675,12 @@ button:not(:disabled):hover {
   background: #fff;
 }
 
+.thumb-actions {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;
@@ -744,6 +750,18 @@ button:not(:disabled):hover {
   cursor: pointer;
   font-size: 28px;
   line-height: 1;
+}
+
+.lightbox-refine-button {
+  position: fixed;
+  top: 18px;
+  right: 70px;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.lightbox-refine-button[hidden] {
+  display: none;
 }
 
 .custom-slice-modal {
@@ -1047,6 +1065,10 @@ button:not(:disabled):hover {
   .custom-slice-footer > div {
     display: grid;
     grid-template-columns: 1.2fr 0.72fr 1.38fr;
+  }
+
+  .custom-slice-footer > div:has(.custom-restore-button[hidden]) {
+    grid-template-columns: 1fr 1fr;
   }
 
   .custom-slice-footer button {
