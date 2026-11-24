@@ -510,7 +510,7 @@ function findBlankBands(counts, minWidth) {
 function getCustomGuideBands(image) {
   const { width, height, canvas } = image;
   const imageData = canvas.getContext("2d").getImageData(0, 0, width, height);
-  const background = getBackgroundColor(imageData);
+  const background = getBackgroundColor(imageData, 4);
   const columns = new Uint32Array(width);
   const rows = new Uint32Array(height);
 
@@ -1079,7 +1079,7 @@ async function runSlice() {
   updateActions();
 }
 
-function getBackgroundColor(imageData) {
+function getBackgroundColor(imageData, alphaThreshold) {
   const { width, height, data } = imageData;
   const points = [
     0,
@@ -1088,16 +1088,22 @@ function getBackgroundColor(imageData) {
     height * width - 1,
   ];
   const totals = [0, 0, 0, 0];
+  let visibleCorners = 0;
 
   points.forEach((pixelIndex) => {
     const index = pixelIndex * 4;
+    // Transparent corners have no RGB color to contribute to the background.
+    if (data[index + 3] <= alphaThreshold) {
+      return;
+    }
+    visibleCorners += 1;
     totals[0] += data[index];
     totals[1] += data[index + 1];
     totals[2] += data[index + 2];
     totals[3] += data[index + 3];
   });
 
-  return totals.map((value) => value / points.length);
+  return visibleCorners ? totals.map((value) => value / visibleCorners) : totals;
 }
 
 function isContentPixel(data, index, background, alphaThreshold, tolerance, detectBackground) {
@@ -2347,7 +2353,7 @@ function autoDetectSlices() {
   const mergeGap = numberValue(els.mergeGap, 4);
   const padding = numberValue(els.padding, 0);
   const detectBackground = els.detectBackground.checked;
-  const background = getBackgroundColor(imageData);
+  const background = getBackgroundColor(imageData, alphaThreshold);
   const mask = new Uint8Array(width * height);
   const useSoftRecoveryMask = mask.length <= 24_000_000 && tolerance > 8;
   const recoveryMask = useSoftRecoveryMask ? new Uint8Array(mask.length) : mask;
@@ -2381,16 +2387,14 @@ function autoDetectSlices() {
     }
   }
 
+  const fourImageGrid = detectFourImageGrid(recoveryMask, width, height, padding);
+  if (fourImageGrid.length) {
+    return sortSnakeReadingOrder(fourImageGrid).map(createSlice);
+  }
+
   const transitionArrows = removeTransitionArrows(mask, data, width, height);
   if (recoveryMask !== mask) {
     removeTransitionArrows(recoveryMask, data, width, height);
-  }
-
-  if (!transitionArrows.length) {
-    const fourImageGrid = detectFourImageGrid(recoveryMask, width, height, padding);
-    if (fourImageGrid.length) {
-      return sortSnakeReadingOrder(fourImageGrid).map(createSlice);
-    }
   }
 
   const visited = new Uint8Array(mask.length);
