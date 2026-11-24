@@ -595,18 +595,39 @@ function resetCustomGrid() {
   setCustomGuides(guessCustomGrid());
 }
 
+function chooseManualGuide(stops, axisPixels) {
+  const boundaries = [0, ...stops.map((stop) => Math.round(stop * axisPixels)), axisPixels];
+  let widestGap = 1;
+  let position = null;
+  for (let index = 1; index < boundaries.length; index += 1) {
+    const start = boundaries[index - 1];
+    const gap = boundaries[index] - start;
+    if (gap > widestGap) {
+      widestGap = gap;
+      position = (start + Math.floor(gap / 2)) / axisPixels;
+    }
+  }
+  return position;
+}
+
 function addCustomGuide(direction) {
-  const stops = direction === "vertical" ? customGridState.vertical : customGridState.horizontal;
-  if (stops.length >= 11) {
+  if (!customGridImage) {
     return;
   }
+  const stops = customGridState[direction];
+  const isVertical = direction === "vertical";
+  if (stops.length >= 11) {
+    els.customSliceCount.textContent = isVertical ? "竖线已达 11 条上限" : "横线已达 11 条上限";
+    return;
+  }
+
   const bands = customGuideBands[direction];
   const interior = bands.filter(isInteriorGuideBand);
-  const position = chooseCustomGuide(interior.length ? interior : bands, stops);
+  const axisPixels = isVertical ? customGridImage.width : customGridImage.height;
+  const position = chooseCustomGuide(interior.length ? interior : bands, stops) ??
+    chooseManualGuide(stops, axisPixels);
   if (position === null) {
-    els.customSliceCount.textContent = direction === "vertical"
-      ? "没有可用的纵向空白带"
-      : "没有可用的横向空白带";
+    els.customSliceCount.textContent = "这个方向已没有可分割的像素";
     return;
   }
   stops.push(position);
@@ -615,6 +636,10 @@ function addCustomGuide(direction) {
   customGridState.rows = customGridState.horizontal.length + 1;
   selectedCustomGuide = { direction, index: stops.indexOf(position) };
   renderCustomGrid();
+  if (!isVertical) {
+    els.customGrid.querySelector(".custom-grid-line.is-selected")
+      ?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function clearCustomGuides() {
